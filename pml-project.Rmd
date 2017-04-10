@@ -1,0 +1,191 @@
+---
+title: "Practical Machine Learning Project"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(caret)
+library(randomForest)
+library(gbm)
+library(e1071)
+```
+
+## Introduction
+
+The introduction of wearable devices fitted with sensors capable of capturing human motion, has made possible to quantify the amount of physical activity. The objective of this project is to use measurements from sensors placed in the forearm, arm, belt and dumbbell of a group of subjects who were asked to perform a set of 10 repetitions of "Unilateral Dumbbell Biceps Curls" in order to classify the quality of the repetitions.
+
+## Data
+
+The data consists of measurements obtained with accelerometers and gyroscopes mounted on the belt, arm, and forearm of the participants in the study, as well as in the dumbbells used during the experiment. The subjects were asked to perform 10 repetitions of "Unilateral Dumbbell Biceps Curls" in five different forms:
+
+- According to specifications (A).
+- Throwing the elbows to the front (B).
+- Lifting the elbow only halfway (C).
+- Lowering the dumbbell only halfway (D).
+- Throwing the hips to the front (E).
+
+We will start by loading the training and testing sets:
+```{r}
+# Load training and testing sets
+df.train <- read.csv("pml-training.csv", header = TRUE, sep = ",")
+df.test <- read.csv("pml-testing.csv", header = TRUE, sep = ",")
+```
+
+Next, we will remove those columns which are not the measurements from the sensors:
+```{r}
+# Preprocessing (leave only raw sensor measurements in both datasets)
+df.train <- df.train[,c(8:11,37:49,60:68,84:86,102,113:124,140,151:160)]
+df.test <- df.test[,c(8:11,37:49,60:68,84:86,102,113:124,140,151:160)]
+```
+
+## Exploratory Data Analysis
+
+Now we are ready to start looking at our data. We will examine just a few variables in this report (for the sake of brevity), these are: _total arm acceleration_,  _total belt acceleration_, _total forearm acceleration_, and _total dumbbell acceleration_. We will now compare them to each other using some summary statistics in the form of boxplots.
+
+```{r echo=FALSE}
+df.accel <- data.frame(Belt=df.train$total_accel_belt, Arm=df.train$total_accel_arm, 
+                       Dumbbell=df.train$total_accel_dumbbell, Forearm=df.train$total_accel_forearm, 
+                       Classe=df.train$classe)
+
+p1 <- ggplot(df.accel, aes(factor(Classe, levels = c("A","B","C","D","E")), Belt)) + 
+  stat_boxplot(geom = "errorbar", width = 0.15) + geom_boxplot(width = 0.4) + 
+  xlab(" ") + ylab("Acceleration") + ggtitle("Total Acceleration Belt") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+p2 <- ggplot(df.accel, aes(factor(Classe, levels = c("A","B","C","D","E")), Arm)) + 
+  stat_boxplot(geom = "errorbar", width = 0.15) + geom_boxplot(width = 0.4) + xlab(" ") + 
+  ylab(" ") + ggtitle("Total Acceleration Arm") + theme(plot.title = element_text(hjust = 0.5))
+
+p3 <- ggplot(df.accel, aes(factor(Classe, levels = c("A","B","C","D","E")), Forearm)) + 
+  stat_boxplot(geom = "errorbar", width = 0.15) + geom_boxplot(width = 0.4) + 
+  xlab("Classe") + ylab("Acceleration") + 
+  ggtitle("Total Acceleration Forearm") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+p4 <- ggplot(df.accel, aes(factor(Classe, levels = c("A","B","C","D","E")), Dumbbell)) + 
+  stat_boxplot(geom = "errorbar", width = 0.15) + geom_boxplot(width = 0.4) + 
+  xlab("Classe") + ylab(" ") + ggtitle("Total Acceleration Dumbbell") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+It seems that some variables show a stronger difference between the correct repetition (A) and any of the incorrect ones (B,C,D,E), as for example in the case of "Total Acceleration Belt". In other cases, there is no clear difference, as for example in "Total Acceleration Forearm".
+
+## Model Fitting
+
+We will fit the data using three techniques: _Bagging_, _Random Forests_, and _Boosting_.
+
+### Bagging
+
+_Boostrap aggregation_ (bagging) as applied to decision trees consists of generating **M** decision trees using **M** bootraped training sets, and then averaging the predictions resulting from all the trees. Averaging all the predictions automatically reduces the variance and the risk of overfitting. Let's now fit our model using this technique:
+
+
+```{r}
+# bagging
+bg <- randomForest(classe ~., data = df.train, ntree = 300, mtry = 52)
+```
+
+```{r echo=FALSE, comment=NA}
+bg
+```
+In the case of bagging, the _Out-Of-Bag (OOB)_ estimation of the error can be used as a replacement for cross-validation. For the $i^{th}$ observation, the error is obtained using the trees in which such obervation was not used during training. The package _randomForest_ calculates this automatically for us.
+
+
+### Random Forests
+
+Random forests is similar to bagging except that at each split a different subset of all the predictors is considered. The objective of this is to _decorrelate_ the resulting trees from each other. This has proven to improve results over bagging.
+
+```{r}
+# random forest
+rf <- randomForest(classe ~ ., data = df.train, ntree = 300)
+```
+
+```{r echo=FALSE, comment=NA}
+rf
+```
+
+Just like in the case of bagging, the number of trees selected must be large enough for the OOB error to have flattened. In our case 300 trees seems sufficient.
+
+```{r echo=FALSE}
+load(file = "plt.Rda") # This file contains a dataframe with the tabulated OOB error rate for baaging and RF using 25 to 300 trees.
+
+ggplot(data=plt, aes(x=no.trees, y=oob, colour=Model)) + geom_line() + geom_point(size=2, shape=21, fill="white") + xlab("Number of Trees") + ylab("OOB Error Rate [%]")
+```
+
+### Boosting
+
+Unlike bagging, in which the trees are grown independently from each other, boosting grows trees sequentially, using information from the previous tree to update the model. The update is accomplished by fitting the residuals instead of the actual observations.
+
+```{r}
+bo <- gbm(classe ~ ., data = df.train, distribution="multinomial", n.trees=150, 
+           interaction.depth=10, cv.folds = 5, shrinkage = 0.02)
+```
+
+```{r echo=FALSE, comment=NA}
+bo
+```
+
+In the case of boosted regression trees, it is possible to overfit if the number of trees if **M** is too large, so in this case we need to use cross-validation to select the number of trees **M**. Usually the number of folds for cross-validation is 5-10.
+
+## Predictions on Test Data
+
+We will now look at the predictions obtained from every model. For _Bagging_ we have:
+
+```{r}
+# prediction on test data
+pred.bg <- predict(bg, newdata = df.test)
+```
+
+```{r echo=FALSE, comment=NA}
+pred.bg
+```
+
+For _Random Forest_ we have:
+
+```{r}
+# prediction on test data
+pred.rf <- predict(rf, newdata = df.test)
+```
+
+```{r echo=FALSE, comment=NA}
+pred.rf
+```
+
+Finally for _Boosting_ we have:
+
+```{r}
+# prediction on test data
+pred.bo <- predict(bo, newdata = df.test, type = "response", n.trees = 150)
+```
+
+In the case of boosting, further processing is needed since the result of the prediction is a _probability matrix_, which assigns to each obervation the probability of belonging to each one of the five classes.
+
+```{r comment=NA}
+p.pred.bo <- apply(pred.bo, 1, which.max)
+colnames(pred.bo)[p.pred.bo]
+```
+
+We can see that all three models make the same predictions.
+
+## Variable Importance
+
+The improvement in accuracy obtained with any of the methods decribed above (over that of single decision tree), comes at the expense of interpretability. A remedy to this problem can be obtained by calculating the _variable importance_ of each predictor according to the average reduction in the _Gini Index_ (in the case of classification) by splits over such predictor. Let's now plot the variable importance using our random forest model:
+
+```{r}
+varImpPlot(rf)
+```
+
+It is clear from the plot, that the two most important variables in predicting the correct class of the repetitions are _roll\_belt_ and _yaw\_belt_.
+
+
